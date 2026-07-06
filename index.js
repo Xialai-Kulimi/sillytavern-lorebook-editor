@@ -93,28 +93,35 @@ async function saveWorldInfoDirect(worldName, data) {
         throw new Error(`AJAX request failed: HTTP ${err.status} - ${err.statusText || 'Forbidden'}`);
     }
 
-    // 1. Force refresh frontend in-memory cache to ensure the LLM sees changes immediately in the next generation turn
-    if (worldInfoCache && typeof worldInfoCache.set === 'function') {
-        worldInfoCache.set(worldName, data);
-        console.log(`[Lorebook Editor Tool] Successfully synchronized client-side cache for world "${worldName}".`);
+    // 1. Clear both the imported module cache and global window cache to force a fresh backend fetch
+    if (worldInfoCache && typeof worldInfoCache.delete === 'function') {
+        worldInfoCache.delete(worldName);
+        console.log(`[Lorebook Editor Tool] Cleared worldInfoCache for "${worldName}".`);
+    }
+    if (window.worldInfoCache && typeof window.worldInfoCache.delete === 'function') {
+        window.worldInfoCache.delete(worldName);
     }
 
-    // 2. Trigger SillyTavern UI event system to reload the lorebook into active chat context
+    // 2. Trigger SillyTavern UI event system
     if (window.eventSource && window.event_types) {
         await window.eventSource.emit(window.event_types.WORLDINFO_UPDATED, worldName, data);
     }
     
-    // 3. Trigger native SillyTavern editor refresh button click in DOM (forces complete UI repaint instantly if editor is open)
-    const refreshBtn = $('#world_refresh');
-    if (refreshBtn.length > 0) {
-        refreshBtn.trigger('click');
-        console.log("[Lorebook Editor Tool] Triggered native #world_refresh click event.");
+    // 3. Force re-selection in the editor UI dropdown to reload the new JSON into active editor scope
+    const editorSelect = $('#world_editor_select');
+    if (editorSelect.length > 0) {
+        const currentIdx = editorSelect.val();
+        if (currentIdx !== null && currentIdx !== "") {
+            // Clear current selection and restore it to trigger a full change -> reload cycle
+            editorSelect.val("").trigger('change');
+            setTimeout(() => {
+                editorSelect.val(currentIdx).trigger('change');
+                console.log("[Lorebook Editor Tool] Successfully reloaded editor panel data from fresh fetch.");
+            }, 50);
+        }
     }
     
-    // 4. Force trigger jQuery change events to force browser UI repaint in the editor select dropdown
-    $('#world_editor_select').trigger('change');
-    
-    // 5. Auto add to active list if not already selected in current session
+    // 4. Auto add to active list if not already selected in current session
     if (window.selected_world_info && !window.selected_world_info.includes(worldName)) {
         window.selected_world_info.push(worldName);
         $('#world_info').val(window.selected_world_info).trigger('change');
