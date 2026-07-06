@@ -1,23 +1,22 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Import worldInfoCache dynamically from SillyTavern's frontend module to clear client-side cache
-let worldInfoCache;
+// Import core world-info functions dynamically to leverage SillyTavern's native data flow
+let loadWorldInfo;
+let saveWorldInfo;
+
 try {
     const worldInfoModule = await import('/scripts/world-info.js');
-    worldInfoCache = worldInfoModule.worldInfoCache;
-    console.log("[Lorebook Editor Tool] Successfully imported worldInfoCache from core module.");
+    loadWorldInfo = worldInfoModule.loadWorldInfo;
+    saveWorldInfo = worldInfoModule.saveWorldInfo;
+    console.log("[Lorebook Editor Tool] Successfully imported native world-info functions from /scripts/world-info.js");
 } catch (e) {
-    console.error("[Lorebook Editor Tool] Failed to import worldInfoCache dynamically:", e);
-}
-
-// Direct fetch of the CSRF token from the server to guarantee validity regardless of global scope access
-async function getCsrfTokenDirect() {
     try {
-        const response = await $.getJSON('/csrf-token');
-        return response.token || "";
-    } catch (e) {
-        console.error("[Lorebook Editor Tool] Failed to fetch CSRF token from server:", e);
-        return "";
+        const worldInfoModule = await import('../../../../world-info.js');
+        loadWorldInfo = worldInfoModule.loadWorldInfo;
+        saveWorldInfo = worldInfoModule.saveWorldInfo;
+        console.log("[Lorebook Editor Tool] Successfully imported native world-info functions from relative path.");
+    } catch (err) {
+        console.error("[Lorebook Editor Tool] Failed to import native world-info functions:", err);
     }
 }
 
@@ -54,80 +53,6 @@ function getActiveWorldName() {
     return null;
 }
 
-// Fetch world info using $.ajax with manually retrieved CSRF token
-async function fetchWorldInfo(worldName) {
-    try {
-        const token = await getCsrfTokenDirect();
-        const response = await $.ajax({
-            url: '/api/worldinfo/get',
-            type: 'POST',
-            headers: {
-                'X-CSRF-Token': token,
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify({ name: worldName }),
-            dataType: 'json'
-        });
-        return response;
-    } catch (e) {
-        console.warn(`[Lorebook Editor Tool] Failed to fetch world info for "${worldName}", assuming empty/new.`, e);
-        return { entries: {} };
-    }
-}
-
-// Save world info using $.ajax with manually retrieved CSRF token
-async function saveWorldInfoDirect(worldName, data) {
-    try {
-        const token = await getCsrfTokenDirect();
-        await $.ajax({
-            url: '/api/worldinfo/edit',
-            type: 'POST',
-            headers: {
-                'X-CSRF-Token': token,
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify({ name: worldName, data: data }),
-            dataType: 'json'
-        });
-    } catch (err) {
-        throw new Error(`AJAX request failed: HTTP ${err.status} - ${err.statusText || 'Forbidden'}`);
-    }
-
-    // 1. Clear both the imported module cache and global window cache to force a fresh backend fetch
-    if (worldInfoCache && typeof worldInfoCache.delete === 'function') {
-        worldInfoCache.delete(worldName);
-        console.log(`[Lorebook Editor Tool] Cleared worldInfoCache for "${worldName}".`);
-    }
-    if (window.worldInfoCache && typeof window.worldInfoCache.delete === 'function') {
-        window.worldInfoCache.delete(worldName);
-    }
-
-    // 2. Trigger SillyTavern UI event system
-    if (window.eventSource && window.event_types) {
-        await window.eventSource.emit(window.event_types.WORLDINFO_UPDATED, worldName, data);
-    }
-    
-    // 3. Force re-selection in the editor UI dropdown to reload the new JSON into active editor scope
-    const editorSelect = $('#world_editor_select');
-    if (editorSelect.length > 0) {
-        const currentIdx = editorSelect.val();
-        if (currentIdx !== null && currentIdx !== "") {
-            // Clear current selection and restore it to trigger a full change -> reload cycle
-            editorSelect.val("").trigger('change');
-            setTimeout(() => {
-                editorSelect.val(currentIdx).trigger('change');
-                console.log("[Lorebook Editor Tool] Successfully reloaded editor panel data from fresh fetch.");
-            }, 50);
-        }
-    }
-    
-    // 4. Auto add to active list if not already selected in current session
-    if (window.selected_world_info && !window.selected_world_info.includes(worldName)) {
-        window.selected_world_info.push(worldName);
-        $('#world_info').val(window.selected_world_info).trigger('change');
-    }
-}
-
 // Helper to find a free UID in entries
 function getFreeUid(data) {
     if (!data.entries) return 1;
@@ -141,7 +66,7 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools with standalone CSRF fetching...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools integrating with ST native world-info flow...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
@@ -164,7 +89,11 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
                 
-                const data = await fetchWorldInfo(targetWorld);
+                if (typeof loadWorldInfo !== 'function') {
+                    return "Error: SillyTavern loadWorldInfo function is not available.";
+                }
+
+                const data = await loadWorldInfo(targetWorld);
                 if (!data || !data.entries || Object.keys(data.entries).length === 0) {
                     return `Lorebook "${targetWorld}" has no entries or is empty.`;
                 }
@@ -221,7 +150,11 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
 
-                const data = await fetchWorldInfo(targetWorld);
+                if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
+                    return "Error: SillyTavern world-info native storage APIs are not available.";
+                }
+
+                const data = await loadWorldInfo(targetWorld);
                 if (!data.entries) data.entries = {};
 
                 const newUid = getFreeUid(data);
@@ -238,7 +171,11 @@ if (isToolCallingSupported()) {
                 
                 data.entries[newUid] = newEntry;
 
-                await saveWorldInfoDirect(targetWorld, data);
+                // Call SillyTavern's native saveWorldInfo function.
+                // This handles CSRF token headers, updates in-memory worldInfoCache, 
+                // triggers WORLDINFO_UPDATED events, and repaints UI panels automatically.
+                await saveWorldInfo(targetWorld, data, true);
+                
                 toastr.success(`[世界書: ${targetWorld}] 成功建立條目：${keys.join(', ')}`);
                 return `Successfully created new entry UID ${newUid} in lorebook "${targetWorld}" with keys: [${keys.join(', ')}].`;
             } catch (err) {
@@ -286,7 +223,11 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
 
-                const data = await fetchWorldInfo(targetWorld);
+                if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
+                    return "Error: SillyTavern world-info native storage APIs are not available.";
+                }
+
+                const data = await loadWorldInfo(targetWorld);
                 if (!data || !data.entries) {
                     return `Error: Failed to load lorebook "${targetWorld}".`;
                 }
@@ -300,7 +241,11 @@ if (isToolCallingSupported()) {
                 if (keys !== undefined) entry.key = keys;
                 if (comment !== undefined) entry.comment = comment;
 
-                await saveWorldInfoDirect(targetWorld, data);
+                // Call SillyTavern's native saveWorldInfo function.
+                // This handles CSRF token headers, updates in-memory worldInfoCache, 
+                // triggers WORLDINFO_UPDATED events, and repaints UI panels automatically.
+                await saveWorldInfo(targetWorld, data, true);
+                
                 toastr.success(`[世界書: ${targetWorld}] 成功更新條目 (UID: ${uid})`);
                 return `Successfully updated entry UID ${uid} in lorebook "${targetWorld}".`;
             } catch (err) {
@@ -309,7 +254,7 @@ if (isToolCallingSupported()) {
         }
     });
 
-    console.log("[Lorebook Editor Tool] All native tools registered successfully with direct CSRF management.");
+    console.log("[Lorebook Editor Tool] All native tools registered successfully.");
 } else {
     console.warn("[Lorebook Editor Tool] Function calling is not supported or not enabled in settings.");
 }
