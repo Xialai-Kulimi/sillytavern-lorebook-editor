@@ -13,7 +13,24 @@ async function getCsrfTokenDirect() {
 
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
-    // 1. Highest Priority: Read the actual selected world info from the SillyTavern UI DOM select element
+    const context = SillyTavern.getContext();
+    const chid = context.characterId;
+
+    // 1. Highest Priority: Read the active character's primary world info from character data
+    if (context.characters && chid !== undefined && context.characters[chid]) {
+        const char = context.characters[chid];
+        if (char.data && char.data.extensions && char.data.extensions.world) {
+            return char.data.extensions.world;
+        }
+    }
+
+    // 2. Second Priority: Read from the character's world selection DOM select element (#character_world)
+    const charWorldDom = $('#character_world').val();
+    if (charWorldDom && typeof charWorldDom === 'string' && charWorldDom !== "") {
+        return charWorldDom;
+    }
+
+    // 3. Third Priority: Fallback to the chat global world info selection DOM select element (#world_info)
     const domVal = $('#world_info').val();
     if (domVal) {
         if (Array.isArray(domVal) && domVal.length > 0 && domVal[0] !== "") {
@@ -23,31 +40,17 @@ function getActiveWorldName() {
         }
     }
 
-    // 2. Fallback: World Info editor's active selection
+    // 4. Fallback: World Info editor's active selection
     if (window.selected_world_info && window.selected_world_info[0]) {
         return window.selected_world_info[0];
     }
     
-    // 3. Fallback: Check window lists
+    // 5. Fallback: Check window lists
     if (window.world_names && window.world_names[0]) {
         const selectEl = document.getElementById('world_editor_select');
         if (selectEl && selectEl.value !== "") {
             const index = Number(selectEl.value);
             if (window.world_names[index]) return window.world_names[index];
-        }
-    }
-
-    // 4. Fallback: Context chatMetadata
-    const context = SillyTavern.getContext();
-    if (context.chatMetadata && context.chatMetadata.world_info) {
-        return context.chatMetadata.world_info;
-    }
-
-    // 5. Fallback: Active character default world info
-    if (context.characters && context.characterId !== undefined && context.characters[context.characterId]) {
-        const char = context.characters[context.characterId];
-        if (char.data && char.data.world) {
-            return char.data.world;
         }
     }
 
