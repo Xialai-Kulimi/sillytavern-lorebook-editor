@@ -1,25 +1,5 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Import core world-info functions dynamically to leverage SillyTavern's native data flow
-let loadWorldInfo;
-let saveWorldInfo;
-
-try {
-    const worldInfoModule = await import('/scripts/world-info.js');
-    loadWorldInfo = worldInfoModule.loadWorldInfo;
-    saveWorldInfo = worldInfoModule.saveWorldInfo;
-    console.log("[Lorebook Editor Tool] Successfully imported native world-info functions from /scripts/world-info.js");
-} catch (e) {
-    try {
-        const worldInfoModule = await import('../../../../world-info.js');
-        loadWorldInfo = worldInfoModule.loadWorldInfo;
-        saveWorldInfo = worldInfoModule.saveWorldInfo;
-        console.log("[Lorebook Editor Tool] Successfully imported native world-info functions from relative path.");
-    } catch (err) {
-        console.error("[Lorebook Editor Tool] Failed to import native world-info functions:", err);
-    }
-}
-
 // Helper to resolve the active character's primary or additional world info name. Returns null if not bound.
 function getActiveWorldName() {
     const context = SillyTavern.getContext();
@@ -66,7 +46,7 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools integrating with ST native world-info flow...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools using exclusively SillyTavern getContext() APIs...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
@@ -89,8 +69,10 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
                 
+                const context = SillyTavern.getContext();
+                const loadWorldInfo = context.loadWorldInfo;
                 if (typeof loadWorldInfo !== 'function') {
-                    return "Error: SillyTavern loadWorldInfo function is not available.";
+                    return "Error: SillyTavern loadWorldInfo function is not available in current getContext.";
                 }
 
                 const data = await loadWorldInfo(targetWorld);
@@ -150,8 +132,11 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
 
+                const context = SillyTavern.getContext();
+                const { loadWorldInfo, saveWorldInfo, reloadWorldInfoEditor, updateWorldInfoList } = context;
+
                 if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
-                    return "Error: SillyTavern world-info native storage APIs are not available.";
+                    return "Error: SillyTavern world-info native storage APIs are not available in current getContext.";
                 }
 
                 const data = await loadWorldInfo(targetWorld);
@@ -171,10 +156,28 @@ if (isToolCallingSupported()) {
                 
                 data.entries[newUid] = newEntry;
 
-                // Call SillyTavern's native saveWorldInfo function.
-                // This handles CSRF token headers, updates in-memory worldInfoCache, 
-                // triggers WORLDINFO_UPDATED events, and repaints UI panels automatically.
+                // Call SillyTavern's native saveWorldInfo function from context (100% guarantees correct instance)
                 await saveWorldInfo(targetWorld, data, true);
+
+                // Call native reload functions to instantly force UI update
+                if (typeof updateWorldInfoList === 'function') {
+                    await updateWorldInfoList();
+                }
+                if (typeof reloadWorldInfoEditor === 'function') {
+                    await reloadWorldInfoEditor(targetWorld);
+                }
+
+                // Force simulate dropdown re-selection to clear and repaint DOM elements
+                const editorSelect = $('#world_editor_select');
+                if (editorSelect.length > 0) {
+                    const currentIdx = editorSelect.val();
+                    if (currentIdx !== null && currentIdx !== "") {
+                        editorSelect.val("").trigger('change');
+                        setTimeout(() => {
+                            editorSelect.val(currentIdx).trigger('change');
+                        }, 50);
+                    }
+                }
                 
                 toastr.success(`[世界書: ${targetWorld}] 成功建立條目：${keys.join(', ')}`);
                 return `Successfully created new entry UID ${newUid} in lorebook "${targetWorld}" with keys: [${keys.join(', ')}].`;
@@ -223,8 +226,11 @@ if (isToolCallingSupported()) {
                     return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
                 }
 
+                const context = SillyTavern.getContext();
+                const { loadWorldInfo, saveWorldInfo, reloadWorldInfoEditor, updateWorldInfoList } = context;
+
                 if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
-                    return "Error: SillyTavern world-info native storage APIs are not available.";
+                    return "Error: SillyTavern world-info native storage APIs are not available in current getContext.";
                 }
 
                 const data = await loadWorldInfo(targetWorld);
@@ -241,10 +247,28 @@ if (isToolCallingSupported()) {
                 if (keys !== undefined) entry.key = keys;
                 if (comment !== undefined) entry.comment = comment;
 
-                // Call SillyTavern's native saveWorldInfo function.
-                // This handles CSRF token headers, updates in-memory worldInfoCache, 
-                // triggers WORLDINFO_UPDATED events, and repaints UI panels automatically.
+                // Call SillyTavern's native saveWorldInfo function from context (100% guarantees correct instance)
                 await saveWorldInfo(targetWorld, data, true);
+
+                // Call native reload functions to instantly force UI update
+                if (typeof updateWorldInfoList === 'function') {
+                    await updateWorldInfoList();
+                }
+                if (typeof reloadWorldInfoEditor === 'function') {
+                    await reloadWorldInfoEditor(targetWorld);
+                }
+
+                // Force simulate dropdown re-selection to clear and repaint DOM elements
+                const editorSelect = $('#world_editor_select');
+                if (editorSelect.length > 0) {
+                    const currentIdx = editorSelect.val();
+                    if (currentIdx !== null && currentIdx !== "") {
+                        editorSelect.val("").trigger('change');
+                        setTimeout(() => {
+                            editorSelect.val(currentIdx).trigger('change');
+                        }, 50);
+                    }
+                }
                 
                 toastr.success(`[世界書: ${targetWorld}] 成功更新條目 (UID: ${uid})`);
                 return `Successfully updated entry UID ${uid} in lorebook "${targetWorld}".`;
@@ -254,7 +278,7 @@ if (isToolCallingSupported()) {
         }
     });
 
-    console.log("[Lorebook Editor Tool] All native tools registered successfully.");
+    console.log("[Lorebook Editor Tool] All native tools registered successfully using getContext() API mapping.");
 } else {
     console.warn("[Lorebook Editor Tool] Function calling is not supported or not enabled in settings.");
 }
