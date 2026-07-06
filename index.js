@@ -1,5 +1,15 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
+// Import worldInfoCache dynamically from SillyTavern's frontend module to clear client-side cache
+let worldInfoCache;
+try {
+    const worldInfoModule = await import('/scripts/world-info.js');
+    worldInfoCache = worldInfoModule.worldInfoCache;
+    console.log("[Lorebook Editor Tool] Successfully imported worldInfoCache from core module.");
+} catch (e) {
+    console.error("[Lorebook Editor Tool] Failed to import worldInfoCache dynamically:", e);
+}
+
 // Direct fetch of the CSRF token from the server to guarantee validity regardless of global scope access
 async function getCsrfTokenDirect() {
     try {
@@ -11,18 +21,19 @@ async function getCsrfTokenDirect() {
     }
 }
 
-// Helper to resolve the active character's primary world info (lorebook) name. Returns null if not bound.
+// Helper to resolve the active character's primary or additional world info name. Returns null if not bound.
 function getActiveWorldName() {
     const context = SillyTavern.getContext();
     const chid = context.characterId;
+    if (!context.characters || chid === undefined || !context.characters[chid]) {
+        return null;
+    }
+    const char = context.characters[chid];
 
     // 1. Highest Priority: Read the active character's primary world info from character data
-    if (context.characters && chid !== undefined && context.characters[chid]) {
-        const char = context.characters[chid];
-        if (char.data && char.data.extensions && char.data.extensions.world) {
-            const world = char.data.extensions.world.trim();
-            if (world !== "") return world;
-        }
+    if (char.data && char.data.extensions && char.data.extensions.world) {
+        const world = char.data.extensions.world.trim();
+        if (world !== "") return world;
     }
 
     // 2. Second Priority: Read from the character's world selection DOM select element (#character_world)
@@ -31,7 +42,15 @@ function getActiveWorldName() {
         return charWorldDom.trim();
     }
 
-    // No primary lorebook is bound to the current character
+    // 3. Third Priority: Read the active character's additional worlds
+    if (char.data && char.data.extensions && char.data.extensions.additional_worlds) {
+        const additional = char.data.extensions.additional_worlds;
+        if (Array.isArray(additional) && additional.length > 0 && additional[0] !== "") {
+            return additional[0].trim();
+        }
+    }
+
+    // No primary or additional lorebook is bound to the current character
     return null;
 }
 
@@ -74,15 +93,25 @@ async function saveWorldInfoDirect(worldName, data) {
         throw new Error(`AJAX request failed: HTTP ${err.status} - ${err.statusText || 'Forbidden'}`);
     }
 
-    // Refresh UI cache and editors immediately
-    if (window.worldInfoCache && typeof window.worldInfoCache.set === 'function') {
+    // Force refresh frontend in-memory cache to ensure the LLM sees changes immediately in the next generation turn
+    if (worldInfoCache && typeof worldInfoCache.set === 'function') {
+        worldInfoCache.set(worldName, data);
+        console.log(`[Lorebook Editor Tool] Successfully synchronized client-side cache for world "${worldName}".`);
+    } else if (window.worldInfoCache && typeof window.worldInfoCache.set === 'function') {
         window.worldInfoCache.set(worldName, data);
     }
+
+    // Trigger SillyTavern UI event system to reload the lorebook into active chat context
     if (window.eventSource && window.event_types) {
         await window.eventSource.emit(window.event_types.WORLDINFO_UPDATED, worldName, data);
     }
+    
+    // Instantly reprint the editor list UI if the editor is open (prevents needing page reloads to show changes)
     if (typeof window.reloadEditor === 'function') {
         window.reloadEditor(worldName);
+    }
+    if (typeof window.printWorldInfoList === 'function') {
+        window.printWorldInfoList();
     }
     
     // Auto add to active list if not already selected in current session
