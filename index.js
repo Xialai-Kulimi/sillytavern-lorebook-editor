@@ -1,35 +1,5 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Import getRequestHeaders from core SillyTavern script module
-let getRequestHeaders;
-try {
-    // '/script.js' is served at the root domain by SillyTavern's express server
-    const coreScript = await import('/script.js');
-    getRequestHeaders = coreScript.getRequestHeaders;
-    console.log("[Lorebook Editor Tool] Successfully imported getRequestHeaders from root script.js");
-} catch (e) {
-    try {
-        // Relative path fallback
-        const coreScript = await import('../../../script.js');
-        getRequestHeaders = coreScript.getRequestHeaders;
-        console.log("[Lorebook Editor Tool] Successfully imported getRequestHeaders from relative path");
-    } catch (err) {
-        console.error("[Lorebook Editor Tool] Failed to import getRequestHeaders from core modules", err);
-    }
-}
-
-// Headers builder fallback
-const getHeaders = () => {
-    if (typeof getRequestHeaders === 'function') {
-        return getRequestHeaders();
-    }
-    // Deep fallback if getRequestHeaders is completely inaccessible
-    return { 
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': window.csrf_token || ''
-    };
-};
-
 // Sanitize filename to avoid directory traversal
 function sanitizeWorldName(name) {
     if (!name) return "DefaultWorld";
@@ -61,33 +31,35 @@ function getActiveWorldName() {
     return "DefaultWorld";
 }
 
-// Fetch world info directly via API endpoint (with auto-create fallback)
+// Fetch world info using SillyTavern's jQuery $.ajax to leverage automatic X-CSRF-Token prefiltering
 async function fetchWorldInfo(worldName) {
     try {
-        const response = await fetch('/api/worldinfo/get', {
-            method: 'POST',
-            headers: getHeaders(),
-            body: JSON.stringify({ name: worldName }),
-            cache: 'no-cache'
+        const response = await $.ajax({
+            url: '/api/worldinfo/get',
+            type: 'POST',
+            data: JSON.stringify({ name: worldName }),
+            contentType: 'application/json',
+            dataType: 'json'
         });
-        if (response.ok) {
-            return await response.json();
-        }
+        return response;
     } catch (e) {
-        console.warn(`[Lorebook Editor Tool] Failed to fetch existing world info for "${worldName}", assuming empty/new.`, e);
+        console.warn(`[Lorebook Editor Tool] Failed to fetch world info for "${worldName}", assuming empty/new.`, e);
+        return { entries: {} };
     }
-    return { entries: {} };
 }
 
-// Save world info directly via API endpoint and refresh UI
+// Save world info using SillyTavern's jQuery $.ajax to leverage automatic X-CSRF-Token prefiltering
 async function saveWorldInfoDirect(worldName, data) {
-    const response = await fetch('/api/worldinfo/edit', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ name: worldName, data: data })
-    });
-    if (!response.ok) {
-        throw new Error(`Failed to save world info: HTTP ${response.status}`);
+    try {
+        await $.ajax({
+            url: '/api/worldinfo/edit',
+            type: 'POST',
+            data: JSON.stringify({ name: worldName, data: data }),
+            contentType: 'application/json',
+            dataType: 'json'
+        });
+    } catch (err) {
+        throw new Error(`AJAX request failed: HTTP ${err.status} - ${err.statusText || 'Forbidden'}`);
     }
 
     // Refresh UI cache and editors immediately
@@ -121,7 +93,7 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools with dynamic World Info target selection...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools with jQuery AJAX integration...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
@@ -278,7 +250,7 @@ if (isToolCallingSupported()) {
         }
     });
 
-    console.log("[Lorebook Editor Tool] All native tools registered successfully with dynamic targets.");
+    console.log("[Lorebook Editor Tool] All native tools registered successfully via jQuery $.ajax.");
 } else {
     console.warn("[Lorebook Editor Tool] Function calling is not supported or not enabled in settings.");
 }
