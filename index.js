@@ -13,9 +13,22 @@ async function getCsrfTokenDirect() {
 
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
+    // 1. Highest Priority: Read the actual selected world info from the SillyTavern UI DOM select element
+    const domVal = $('#world_info').val();
+    if (domVal) {
+        if (Array.isArray(domVal) && domVal.length > 0 && domVal[0] !== "") {
+            return domVal[0];
+        } else if (typeof domVal === 'string' && domVal !== "") {
+            return domVal;
+        }
+    }
+
+    // 2. Fallback: World Info editor's active selection
     if (window.selected_world_info && window.selected_world_info[0]) {
         return window.selected_world_info[0];
     }
+    
+    // 3. Fallback: Check window lists
     if (window.world_names && window.world_names[0]) {
         const selectEl = document.getElementById('world_editor_select');
         if (selectEl && selectEl.value !== "") {
@@ -23,16 +36,22 @@ function getActiveWorldName() {
             if (window.world_names[index]) return window.world_names[index];
         }
     }
+
+    // 4. Fallback: Context chatMetadata
     const context = SillyTavern.getContext();
     if (context.chatMetadata && context.chatMetadata.world_info) {
         return context.chatMetadata.world_info;
     }
+
+    // 5. Fallback: Active character default world info
     if (context.characters && context.characterId !== undefined && context.characters[context.characterId]) {
         const char = context.characters[context.characterId];
         if (char.data && char.data.world) {
             return char.data.world;
         }
     }
+
+    // 6. Absolute Fallback
     return "DefaultWorld";
 }
 
