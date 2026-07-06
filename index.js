@@ -1,13 +1,18 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Import worldInfoCache dynamically from SillyTavern's frontend module to clear client-side cache
+// Import core world-info functions dynamically to synchronize in-memory cache and trigger UI repaint
 let worldInfoCache;
+let printWorldInfoList;
+let reloadEditor;
+
 try {
     const worldInfoModule = await import('/scripts/world-info.js');
     worldInfoCache = worldInfoModule.worldInfoCache;
-    console.log("[Lorebook Editor Tool] Successfully imported worldInfoCache from core module.");
+    printWorldInfoList = worldInfoModule.printWorldInfoList;
+    reloadEditor = worldInfoModule.reloadEditor;
+    console.log("[Lorebook Editor Tool] Successfully imported world-info core functions.");
 } catch (e) {
-    console.error("[Lorebook Editor Tool] Failed to import worldInfoCache dynamically:", e);
+    console.error("[Lorebook Editor Tool] Failed to import world-info core functions dynamically:", e);
 }
 
 // Direct fetch of the CSRF token from the server to guarantee validity regardless of global scope access
@@ -93,28 +98,31 @@ async function saveWorldInfoDirect(worldName, data) {
         throw new Error(`AJAX request failed: HTTP ${err.status} - ${err.statusText || 'Forbidden'}`);
     }
 
-    // Force refresh frontend in-memory cache to ensure the LLM sees changes immediately in the next generation turn
+    // 1. Force refresh frontend in-memory cache to ensure the LLM sees changes immediately in the next generation turn
     if (worldInfoCache && typeof worldInfoCache.set === 'function') {
         worldInfoCache.set(worldName, data);
         console.log(`[Lorebook Editor Tool] Successfully synchronized client-side cache for world "${worldName}".`);
-    } else if (window.worldInfoCache && typeof window.worldInfoCache.set === 'function') {
-        window.worldInfoCache.set(worldName, data);
     }
 
-    // Trigger SillyTavern UI event system to reload the lorebook into active chat context
+    // 2. Trigger SillyTavern UI event system to reload the lorebook into active chat context
     if (window.eventSource && window.event_types) {
         await window.eventSource.emit(window.event_types.WORLDINFO_UPDATED, worldName, data);
     }
     
-    // Instantly reprint the editor list UI if the editor is open (prevents needing page reloads to show changes)
-    if (typeof window.reloadEditor === 'function') {
-        window.reloadEditor(worldName);
-    }
-    if (typeof window.printWorldInfoList === 'function') {
-        window.printWorldInfoList();
+    // 3. Instantly repaint the UI editor list (clears and redraws left-hand items panel)
+    if (typeof printWorldInfoList === 'function') {
+        printWorldInfoList();
     }
     
-    // Auto add to active list if not already selected in current session
+    // 4. Reload Editor view fields for the current world info name
+    if (typeof reloadEditor === 'function') {
+        reloadEditor(worldName);
+    }
+
+    // 5. Force trigger jQuery change events to force browser UI repaint in the DOM
+    $('#world_editor_select').trigger('change');
+    
+    // 6. Auto add to active list if not already selected in current session
     if (window.selected_world_info && !window.selected_world_info.includes(worldName)) {
         window.selected_world_info.push(worldName);
         $('#world_info').val(window.selected_world_info).trigger('change');
