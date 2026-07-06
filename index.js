@@ -6,6 +6,12 @@ const getHeaders = window.getRequestHeaders || (() => ({
     'X-CSRF-Token': window.csrf_token || ''
 }));
 
+// Sanitize filename to avoid directory traversal
+function sanitizeWorldName(name) {
+    if (!name) return "DefaultWorld";
+    return name.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, "_").trim();
+}
+
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
     // 1. Try global selected_world_info array
@@ -14,7 +20,6 @@ function getActiveWorldName() {
     }
     // 2. Try window variables
     if (window.world_names && window.world_names[0]) {
-        // Fallback to first available world if editor is open
         const selectEl = document.getElementById('world_editor_select');
         if (selectEl && selectEl.value !== "") {
             const index = Number(selectEl.value);
@@ -26,27 +31,32 @@ function getActiveWorldName() {
     if (context.chatMetadata && context.chatMetadata.world_info) {
         return context.chatMetadata.world_info;
     }
-    // 4. Try active character primary world
+    // 4. Try active character name
     if (context.characters && context.characterId !== undefined && context.characters[context.characterId]) {
         const char = context.characters[context.characterId];
-        if (char.data && char.data.world) {
-            return char.data.world;
+        if (char.data && char.data.name) {
+            return char.data.name;
         }
     }
-    return null;
+    return "DefaultWorld";
 }
 
-// Fetch world info directly via API endpoint
+// Fetch world info directly via API endpoint (with auto-create fallback)
 async function fetchWorldInfo(worldName) {
-    const response = await fetch('/api/worldinfo/get', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ name: worldName })
-    });
-    if (!response.ok) {
-        throw new Error(`Failed to load world info: HTTP ${response.status}`);
+    try {
+        const response = await fetch('/api/worldinfo/get', {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({ name: worldName })
+        });
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch (e) {
+        console.warn(`[Lorebook Editor Tool] Failed to fetch existing world info for "${worldName}", assuming empty/new.`, e);
     }
-    return await response.json();
+    // If not found or failed, return empty world info structure
+    return { entries: {} };
 }
 
 // Save world info directly via API endpoint and refresh UI
@@ -70,6 +80,12 @@ async function saveWorldInfoDirect(worldName, data) {
     if (typeof window.reloadEditor === 'function') {
         window.reloadEditor(worldName);
     }
+    
+    // Auto add to active list if not already selected in current session
+    if (window.selected_world_info && !window.selected_world_info.includes(worldName)) {
+        window.selected_world_info.push(worldName);
+        $('#world_info').val(window.selected_world_info).trigger('change');
+    }
 }
 
 // Helper to find a free UID in entries
@@ -85,26 +101,28 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools via SillyTavern Context API...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools with dynamic World Info target selection...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
         name: 'get_lorebook_entries',
         displayName: 'Get Lorebook Entries',
-        description: 'Retrieves all existing entries, their UIDs, trigger keys, comments, and contents in the currently active lorebook. Use this to inspect current world state, character relationships, and locations.',
+        description: 'Retrieves all existing entries in a specified lorebook. You can target a specific lorebook file. If world_name is omitted, it will automatically fall back to the currently active lorebook.',
         parameters: {
             type: 'object',
-            properties: {}
-        },
-        action: async () => {
-            try {
-                const worldName = getActiveWorldName();
-                if (!worldName) {
-                    return "Error: No active lorebook bound to the current chat session. Ask the user to assign a lorebook first.";
+            properties: {
+                world_name: { 
+                    type: 'string', 
+                    description: 'The name of the lorebook to read (e.g., "Size_Queen_Harem"). If omitted, falls back to active chat lorebook.' 
                 }
-                const data = await fetchWorldInfo(worldName);
-                if (!data || !data.entries) {
-                    return `Lorebook "${worldName}" has no entries or is empty.`;
+            }
+        },
+        action: async ({ world_name }) => {
+            try {
+                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const data = await fetchWorldInfo(targetWorld);
+                if (!data || !data.entries || Object.keys(data.entries).length === 0) {
+                    return `Lorebook "${targetWorld}" has no entries or is empty.`;
                 }
                 
                 const result = Object.entries(data.entries).map(([uid, entry]) => ({
@@ -115,7 +133,7 @@ if (isToolCallingSupported()) {
                 }));
                 
                 return JSON.stringify({
-                    lorebook: worldName,
+                    lorebook: targetWorld,
                     entries: result
                 }, null, 2);
             } catch (err) {
@@ -128,7 +146,7 @@ if (isToolCallingSupported()) {
     registerFunctionTool({
         name: 'create_lorebook_entry',
         displayName: 'Create Lorebook Entry',
-        description: 'Creates a brand new entry in the active lorebook. Use this when the player builds a new facility, travels to an undiscovered area, or when a new NPC is introduced. Always provide relevant trigger keywords.',
+        description: 'Creates a brand new entry in a specified lorebook. You can specify which lorebook file to write to. If the specified lorebook file does not exist, a new one will be created automatically. Provide relevant trigger keywords.',
         parameters: {
             type: 'object',
             properties: {
@@ -141,6 +159,10 @@ if (isToolCallingSupported()) {
                     items: { type: 'string' }, 
                     description: 'Trigger keywords (e.g., ["Gym", "Fitness Center"]) that will load this entry into context.' 
                 },
+                world_name: { 
+                    type: 'string', 
+                    description: 'The name of the lorebook to write to (e.g., "Aetheria_World"). If omitted, writes to the currently active chat lorebook.' 
+                },
                 comment: { 
                     type: 'string', 
                     description: 'A brief note classifying this entry (e.g., "Location", "NPC Relationship", "Facility Status").' 
@@ -148,17 +170,11 @@ if (isToolCallingSupported()) {
             },
             required: ['content', 'keys']
         },
-        action: async ({ content, keys, comment }) => {
+        action: async ({ content, keys, world_name, comment }) => {
             try {
-                const worldName = getActiveWorldName();
-                if (!worldName) {
-                    return "Error: No active lorebook bound to the current chat session.";
-                }
-                const data = await fetchWorldInfo(worldName);
-                if (!data) {
-                    return `Error: Failed to load lorebook "${worldName}".`;
-                }
-
+                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const data = await fetchWorldInfo(targetWorld);
+                
                 if (!data.entries) data.entries = {};
 
                 const newUid = getFreeUid(data);
@@ -175,9 +191,9 @@ if (isToolCallingSupported()) {
                 
                 data.entries[newUid] = newEntry;
 
-                await saveWorldInfoDirect(worldName, data);
-                toastr.success(`[世界書] 成功建立條目：${keys.join(', ')}`);
-                return `Successfully created new entry UID ${newUid} in lorebook "${worldName}" with keys: [${keys.join(', ')}].`;
+                await saveWorldInfoDirect(targetWorld, data);
+                toastr.success(`[世界書: ${targetWorld}] 成功建立條目：${keys.join(', ')}`);
+                return `Successfully created new entry UID ${newUid} in lorebook "${targetWorld}" with keys: [${keys.join(', ')}].`;
             } catch (err) {
                 return `Error creating entry: ${err.message}`;
             }
@@ -188,60 +204,61 @@ if (isToolCallingSupported()) {
     registerFunctionTool({
         name: 'update_lorebook_entry',
         displayName: 'Update Lorebook Entry',
-        description: 'Updates an existing entry in the active lorebook using its UID. Use this to dynamically edit facility status (e.g., broken, upgraded), character relationships (e.g., relationship levels), or location descriptions.',
+        description: 'Updates an existing entry in a specified lorebook using its UID. You can specify which lorebook file to modify.',
         parameters: {
             type: 'object',
             properties: {
                 uid: { 
                     type: 'string', 
                     description: 'The unique ID (UID) of the lorebook entry to update.' 
-                    },
+                },
+                world_name: { 
+                    type: 'string', 
+                    description: 'The name of the lorebook to modify. If omitted, targets the active chat lorebook.' 
+                },
                 content: { 
                     type: 'string', 
-                    description: 'The new description/details for the entry. Leave undefined if you do not want to modify the content.' 
+                    description: 'The new description/details for the entry. Leave undefined to keep existing.' 
                 },
                 keys: { 
                     type: 'array', 
                     items: { type: 'string' }, 
-                    description: 'New trigger keywords. Leave undefined if you do not want to modify triggers.' 
+                    description: 'New trigger keywords. Leave undefined to keep existing.' 
                 },
                 comment: { 
                     type: 'string', 
-                    description: 'Updated note/classification. Leave undefined if you do not want to modify it.' 
+                    description: 'Updated note/classification. Leave undefined to keep existing.' 
                 }
             },
             required: ['uid']
         },
-        action: async ({ uid, content, keys, comment }) => {
+        action: async ({ uid, world_name, content, keys, comment }) => {
             try {
-                const worldName = getActiveWorldName();
-                if (!worldName) {
-                    return "Error: No active lorebook bound to the current chat session.";
-                }
-                const data = await fetchWorldInfo(worldName);
+                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const data = await fetchWorldInfo(targetWorld);
                 if (!data || !data.entries) {
-                    return `Error: Failed to load lorebook "${worldName}".`;
+                    return `Error: Failed to load lorebook "${targetWorld}".`;
                 }
 
                 const entry = data.entries[uid];
                 if (!entry) {
-                    return `Error: Entry with UID "${uid}" was not found in lorebook "${worldName}".`;
+                    return `Error: Entry with UID "${uid}" was not found in lorebook "${targetWorld}".`;
                 }
 
                 if (content !== undefined) entry.content = content;
                 if (keys !== undefined) entry.key = keys;
                 if (comment !== undefined) entry.comment = comment;
 
-                await saveWorldInfoDirect(worldName, data);
-                toastr.success(`[世界書] 成功更新條目 (UID: ${uid})`);
-                return `Successfully updated entry UID ${uid} in lorebook "${worldName}".`;
+                await saveWorldInfoDirect(targetWorld, data);
+                toastr.success(`[世界書: ${targetWorld}] 成功更新條目 (UID: ${uid})`);
+                return `Successfully updated entry UID ${uid} in lorebook "${targetWorld}".`;
             } catch (err) {
                 return `Error updating entry: ${err.message}`;
             }
         }
     });
 
-    console.log("[Lorebook Editor Tool] All native tools registered successfully.");
+    console.log("[Lorebook Editor Tool] All native tools registered successfully with dynamic targets.");
 } else {
     console.warn("[Lorebook Editor Tool] Function calling is not supported or not enabled in settings.");
 }
