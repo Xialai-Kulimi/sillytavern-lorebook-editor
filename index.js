@@ -11,7 +11,7 @@ async function getCsrfTokenDirect() {
     }
 }
 
-// Helper to resolve the active world name bound to the chat
+// Helper to resolve the active character's primary world info (lorebook) name. Returns null if not bound.
 function getActiveWorldName() {
     const context = SillyTavern.getContext();
     const chid = context.characterId;
@@ -20,42 +20,19 @@ function getActiveWorldName() {
     if (context.characters && chid !== undefined && context.characters[chid]) {
         const char = context.characters[chid];
         if (char.data && char.data.extensions && char.data.extensions.world) {
-            return char.data.extensions.world;
+            const world = char.data.extensions.world.trim();
+            if (world !== "") return world;
         }
     }
 
     // 2. Second Priority: Read from the character's world selection DOM select element (#character_world)
     const charWorldDom = $('#character_world').val();
-    if (charWorldDom && typeof charWorldDom === 'string' && charWorldDom !== "") {
-        return charWorldDom;
+    if (charWorldDom && typeof charWorldDom === 'string' && charWorldDom.trim() !== "") {
+        return charWorldDom.trim();
     }
 
-    // 3. Third Priority: Fallback to the chat global world info selection DOM select element (#world_info)
-    const domVal = $('#world_info').val();
-    if (domVal) {
-        if (Array.isArray(domVal) && domVal.length > 0 && domVal[0] !== "") {
-            return domVal[0];
-        } else if (typeof domVal === 'string' && domVal !== "") {
-            return domVal;
-        }
-    }
-
-    // 4. Fallback: World Info editor's active selection
-    if (window.selected_world_info && window.selected_world_info[0]) {
-        return window.selected_world_info[0];
-    }
-    
-    // 5. Fallback: Check window lists
-    if (window.world_names && window.world_names[0]) {
-        const selectEl = document.getElementById('world_editor_select');
-        if (selectEl && selectEl.value !== "") {
-            const index = Number(selectEl.value);
-            if (window.world_names[index]) return window.world_names[index];
-        }
-    }
-
-    // 6. Absolute Fallback
-    return "DefaultWorld";
+    // No primary lorebook is bound to the current character
+    return null;
 }
 
 // Fetch world info using $.ajax with manually retrieved CSRF token
@@ -134,19 +111,23 @@ if (isToolCallingSupported()) {
     registerFunctionTool({
         name: 'get_lorebook_entries',
         displayName: 'Get Lorebook Entries',
-        description: 'Retrieves all existing entries in a specified lorebook. You can target a specific lorebook file. If world_name is omitted, it will automatically fall back to the currently active lorebook.',
+        description: 'Retrieves all existing entries in a specified lorebook. You can target a specific lorebook file. If world_name is omitted, it will automatically fall back to the currently active character primary lorebook.',
         parameters: {
             type: 'object',
             properties: {
                 world_name: { 
                     type: 'string', 
-                    description: 'The name of the lorebook to read (e.g., "Size Queen Harem"). If omitted, falls back to active chat lorebook.' 
+                    description: 'The name of the lorebook to read (e.g., "Size Queen Harem"). If omitted, falls back to the character primary lorebook.' 
                 }
             }
         },
         action: async ({ world_name }) => {
             try {
-                const targetWorld = (world_name || getActiveWorldName()).trim();
+                const targetWorld = (world_name || getActiveWorldName());
+                if (!targetWorld) {
+                    return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
+                }
+                
                 const data = await fetchWorldInfo(targetWorld);
                 if (!data || !data.entries || Object.keys(data.entries).length === 0) {
                     return `Lorebook "${targetWorld}" has no entries or is empty.`;
@@ -188,7 +169,7 @@ if (isToolCallingSupported()) {
                 },
                 world_name: { 
                     type: 'string', 
-                    description: 'The name of the lorebook to write to (e.g., "Aetheria World"). If omitted, writes to the currently active chat lorebook.' 
+                    description: 'The name of the lorebook to write to (e.g., "Aetheria World"). If omitted, writes to the currently active character primary lorebook.' 
                 },
                 comment: { 
                     type: 'string', 
@@ -199,9 +180,12 @@ if (isToolCallingSupported()) {
         },
         action: async ({ content, keys, world_name, comment }) => {
             try {
-                const targetWorld = (world_name || getActiveWorldName()).trim();
+                const targetWorld = (world_name || getActiveWorldName());
+                if (!targetWorld) {
+                    return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
+                }
+
                 const data = await fetchWorldInfo(targetWorld);
-                
                 if (!data.entries) data.entries = {};
 
                 const newUid = getFreeUid(data);
@@ -241,7 +225,7 @@ if (isToolCallingSupported()) {
                 },
                 world_name: { 
                     type: 'string', 
-                    description: 'The name of the lorebook to modify. If omitted, targets the active chat lorebook.' 
+                    description: 'The name of the lorebook to modify. If omitted, targets the active character primary lorebook.' 
                 },
                 content: { 
                     type: 'string', 
@@ -261,7 +245,11 @@ if (isToolCallingSupported()) {
         },
         action: async ({ uid, world_name, content, keys, comment }) => {
             try {
-                const targetWorld = (world_name || getActiveWorldName()).trim();
+                const targetWorld = (world_name || getActiveWorldName());
+                if (!targetWorld) {
+                    return "Error: The active character has no primary lorebook bound to their profile. Please ask the user to assign a primary world info (lorebook) to the character first in the character settings panel.";
+                }
+
                 const data = await fetchWorldInfo(targetWorld);
                 if (!data || !data.entries) {
                     return `Error: Failed to load lorebook "${targetWorld}".`;
