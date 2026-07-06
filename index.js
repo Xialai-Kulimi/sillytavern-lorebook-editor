@@ -1,36 +1,59 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Helper to resolve the active character's primary or additional world info name. Returns null if not bound.
+// Helper to resolve the active character's primary or additional world info name with case-correction
 function getActiveWorldName() {
     const context = SillyTavern.getContext();
     const chid = context.characterId;
     if (!context.characters || chid === undefined || !context.characters[chid]) {
+        console.warn("[Lorebook Editor Tool] No active character session found in context.");
         return null;
     }
     const char = context.characters[chid];
+    let detectedName = null;
 
     // 1. Highest Priority: Read the active character's primary world info from character data
     if (char.data && char.data.extensions && char.data.extensions.world) {
         const world = char.data.extensions.world.trim();
-        if (world !== "") return world;
-    }
-
-    // 2. Second Priority: Read from the character's world selection DOM select element (#character_world)
-    const charWorldDom = $('#character_world').val();
-    if (charWorldDom && typeof charWorldDom === 'string' && charWorldDom.trim() !== "") {
-        return charWorldDom.trim();
-    }
-
-    // 3. Third Priority: Read the active character's additional worlds
-    if (char.data && char.data.extensions && char.data.extensions.additional_worlds) {
-        const additional = char.data.extensions.additional_worlds;
-        if (Array.isArray(additional) && additional.length > 0 && additional[0] !== "") {
-            return additional[0].trim();
+        if (world !== "") {
+            detectedName = world;
+            console.log(`[Lorebook Editor Tool] Detected primary world from character data: "${detectedName}"`);
         }
     }
 
-    // No primary or additional lorebook is bound to the current character
-    return null;
+    // 2. Second Priority: Read from the character's world selection DOM select element (#character_world)
+    if (!detectedName) {
+        const charWorldDom = $('#character_world').val();
+        if (charWorldDom && typeof charWorldDom === 'string' && charWorldDom.trim() !== "") {
+            detectedName = charWorldDom.trim();
+            console.log(`[Lorebook Editor Tool] Detected primary world from DOM selection: "${detectedName}"`);
+        }
+    }
+
+    // 3. Third Priority: Read the active character's additional worlds
+    if (!detectedName && char.data && char.data.extensions && char.data.extensions.additional_worlds) {
+        const additional = char.data.extensions.additional_worlds;
+        if (Array.isArray(additional) && additional.length > 0 && additional[0] !== "") {
+            detectedName = additional[0].trim();
+            console.log(`[Lorebook Editor Tool] Detected additional world from character data: "${detectedName}"`);
+        }
+    }
+
+    if (!detectedName) {
+        console.warn("[Lorebook Editor Tool] No primary or additional world name detected for character.");
+        return null;
+    }
+
+    // Auto-correct case-sensitivity to match exact naming in SillyTavern database
+    const worldNamesList = context.world_names || window.world_names || [];
+    const matched = worldNamesList.find(w => w.toLowerCase() === detectedName.toLowerCase());
+    if (matched) {
+        if (matched !== detectedName) {
+            console.log(`[Lorebook Editor Tool] Auto-corrected case of world name: "${detectedName}" -> "${matched}"`);
+        }
+        return matched;
+    }
+
+    return detectedName;
 }
 
 // Helper to find a free UID in entries
@@ -46,13 +69,13 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools using exclusively SillyTavern getContext() APIs...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
         name: 'get_lorebook_entries',
         displayName: 'Get Lorebook Entries',
-        description: 'Retrieves all existing entries in a specified lorebook. You can target a specific lorebook file. If world_name is omitted, it will automatically fall back to the currently active character primary lorebook.',
+        description: 'Retrieves all existing entries in a specified lorebook. If world_name is omitted, it will automatically fall back to the currently active character primary lorebook.',
         parameters: {
             type: 'object',
             properties: {
@@ -72,9 +95,11 @@ if (isToolCallingSupported()) {
                 const context = SillyTavern.getContext();
                 const loadWorldInfo = context.loadWorldInfo;
                 if (typeof loadWorldInfo !== 'function') {
+                    console.error("[Lorebook Editor Tool] loadWorldInfo is not a function in context!", context);
                     return "Error: SillyTavern loadWorldInfo function is not available in current getContext.";
                 }
 
+                console.log(`[Lorebook Editor Tool] get_lorebook_entries: Loading world info for "${targetWorld}"...`);
                 const data = await loadWorldInfo(targetWorld);
                 if (!data || !data.entries || Object.keys(data.entries).length === 0) {
                     return `Lorebook "${targetWorld}" has no entries or is empty.`;
@@ -87,11 +112,13 @@ if (isToolCallingSupported()) {
                     comment: entry.comment || ""
                 }));
                 
+                console.log(`[Lorebook Editor Tool] get_lorebook_entries: Successfully loaded ${result.length} entries for "${targetWorld}".`);
                 return JSON.stringify({
                     lorebook: targetWorld,
                     entries: result
                 }, null, 2);
             } catch (err) {
+                console.error("[Lorebook Editor Tool] get_lorebook_entries action failed:", err);
                 return `Error fetching entries: ${err.message}`;
             }
         }
@@ -136,9 +163,11 @@ if (isToolCallingSupported()) {
                 const { loadWorldInfo, saveWorldInfo, reloadWorldInfoEditor, updateWorldInfoList } = context;
 
                 if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
+                    console.error("[Lorebook Editor Tool] Native world-info load/save functions are missing!", context);
                     return "Error: SillyTavern world-info native storage APIs are not available in current getContext.";
                 }
 
+                console.log(`[Lorebook Editor Tool] create_lorebook_entry: Fetching world info for "${targetWorld}"...`);
                 const data = await loadWorldInfo(targetWorld);
                 if (!data.entries) data.entries = {};
 
@@ -155,15 +184,20 @@ if (isToolCallingSupported()) {
                 };
                 
                 data.entries[newUid] = newEntry;
+                console.log(`[Lorebook Editor Tool] Adding entry UID ${newUid} to "${targetWorld}":`, newEntry);
 
-                // Call SillyTavern's native saveWorldInfo function from context (100% guarantees correct instance)
+                // Call SillyTavern's native saveWorldInfo function from context
+                console.log(`[Lorebook Editor Tool] Calling native saveWorldInfo for "${targetWorld}"...`);
                 await saveWorldInfo(targetWorld, data, true);
+                console.log("[Lorebook Editor Tool] Native saveWorldInfo call returned successfully.");
 
                 // Call native reload functions to instantly force UI update
                 if (typeof updateWorldInfoList === 'function') {
+                    console.log("[Lorebook Editor Tool] Calling native updateWorldInfoList...");
                     await updateWorldInfoList();
                 }
                 if (typeof reloadWorldInfoEditor === 'function') {
+                    console.log(`[Lorebook Editor Tool] Calling native reloadWorldInfoEditor for "${targetWorld}"...`);
                     await reloadWorldInfoEditor(targetWorld);
                 }
 
@@ -172,9 +206,11 @@ if (isToolCallingSupported()) {
                 if (editorSelect.length > 0) {
                     const currentIdx = editorSelect.val();
                     if (currentIdx !== null && currentIdx !== "") {
+                        console.log("[Lorebook Editor Tool] Simulating dropdown re-selection to force DOM repaint...");
                         editorSelect.val("").trigger('change');
                         setTimeout(() => {
                             editorSelect.val(currentIdx).trigger('change');
+                            console.log("[Lorebook Editor Tool] Reselection trigger completed.");
                         }, 50);
                     }
                 }
@@ -182,6 +218,7 @@ if (isToolCallingSupported()) {
                 toastr.success(`[世界書: ${targetWorld}] 成功建立條目：${keys.join(', ')}`);
                 return `Successfully created new entry UID ${newUid} in lorebook "${targetWorld}" with keys: [${keys.join(', ')}].`;
             } catch (err) {
+                console.error("[Lorebook Editor Tool] create_lorebook_entry action failed:", err);
                 return `Error creating entry: ${err.message}`;
             }
         }
@@ -230,9 +267,11 @@ if (isToolCallingSupported()) {
                 const { loadWorldInfo, saveWorldInfo, reloadWorldInfoEditor, updateWorldInfoList } = context;
 
                 if (typeof loadWorldInfo !== 'function' || typeof saveWorldInfo !== 'function') {
+                    console.error("[Lorebook Editor Tool] Native world-info load/save functions are missing!", context);
                     return "Error: SillyTavern world-info native storage APIs are not available in current getContext.";
                 }
 
+                console.log(`[Lorebook Editor Tool] update_lorebook_entry: Fetching world info for "${targetWorld}"...`);
                 const data = await loadWorldInfo(targetWorld);
                 if (!data || !data.entries) {
                     return `Error: Failed to load lorebook "${targetWorld}".`;
@@ -246,15 +285,20 @@ if (isToolCallingSupported()) {
                 if (content !== undefined) entry.content = content;
                 if (keys !== undefined) entry.key = keys;
                 if (comment !== undefined) entry.comment = comment;
+                console.log(`[Lorebook Editor Tool] Updating entry UID ${uid} in "${targetWorld}":`, entry);
 
-                // Call SillyTavern's native saveWorldInfo function from context (100% guarantees correct instance)
+                // Call SillyTavern's native saveWorldInfo function from context
+                console.log(`[Lorebook Editor Tool] Calling native saveWorldInfo for "${targetWorld}"...`);
                 await saveWorldInfo(targetWorld, data, true);
+                console.log("[Lorebook Editor Tool] Native saveWorldInfo call returned successfully.");
 
                 // Call native reload functions to instantly force UI update
                 if (typeof updateWorldInfoList === 'function') {
+                    console.log("[Lorebook Editor Tool] Calling native updateWorldInfoList...");
                     await updateWorldInfoList();
                 }
                 if (typeof reloadWorldInfoEditor === 'function') {
+                    console.log(`[Lorebook Editor Tool] Calling native reloadWorldInfoEditor for "${targetWorld}"...`);
                     await reloadWorldInfoEditor(targetWorld);
                 }
 
@@ -263,6 +307,7 @@ if (isToolCallingSupported()) {
                 if (editorSelect.length > 0) {
                     const currentIdx = editorSelect.val();
                     if (currentIdx !== null && currentIdx !== "") {
+                        console.log("[Lorebook Editor Tool] Simulating dropdown re-selection to force DOM repaint...");
                         editorSelect.val("").trigger('change');
                         setTimeout(() => {
                             editorSelect.val(currentIdx).trigger('change');
@@ -273,6 +318,7 @@ if (isToolCallingSupported()) {
                 toastr.success(`[世界書: ${targetWorld}] 成功更新條目 (UID: ${uid})`);
                 return `Successfully updated entry UID ${uid} in lorebook "${targetWorld}".`;
             } catch (err) {
+                console.error("[Lorebook Editor Tool] update_lorebook_entry action failed:", err);
                 return `Error updating entry: ${err.message}`;
             }
         }
