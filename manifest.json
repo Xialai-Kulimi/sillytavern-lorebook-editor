@@ -1,0 +1,8 @@
+{
+    "display_name": "AI Lorebook Editor Tool",
+    "loading_order": 10,
+    "js": "index.js",
+    "author": "Antigravity",
+    "version": "1.0.0",
+    "description": "Registers function tools for the LLM to read, write, and create lorebook entries dynamically."
+}
