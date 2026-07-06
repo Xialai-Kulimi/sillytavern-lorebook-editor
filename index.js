@@ -1,11 +1,5 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Sanitize filename to avoid directory traversal
-function sanitizeWorldName(name) {
-    if (!name) return "DefaultWorld";
-    return name.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, "_").trim();
-}
-
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
     if (window.selected_world_info && window.selected_world_info[0]) {
@@ -105,13 +99,13 @@ if (isToolCallingSupported()) {
             properties: {
                 world_name: { 
                     type: 'string', 
-                    description: 'The name of the lorebook to read (e.g., "Size_Queen_Harem"). If omitted, falls back to active chat lorebook.' 
+                    description: 'The name of the lorebook to read (e.g., "Size Queen Harem"). If omitted, falls back to active chat lorebook.' 
                 }
             }
         },
         action: async ({ world_name }) => {
             try {
-                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const targetWorld = (world_name || getActiveWorldName()).trim();
                 const data = await fetchWorldInfo(targetWorld);
                 if (!data || !data.entries || Object.keys(data.entries).length === 0) {
                     return `Lorebook "${targetWorld}" has no entries or is empty.`;
@@ -153,7 +147,7 @@ if (isToolCallingSupported()) {
                 },
                 world_name: { 
                     type: 'string', 
-                    description: 'The name of the lorebook to write to (e.g., "Aetheria_World"). If omitted, writes to the currently active chat lorebook.' 
+                    description: 'The name of the lorebook to write to (e.g., "Aetheria World"). If omitted, writes to the currently active chat lorebook.' 
                 },
                 comment: { 
                     type: 'string', 
@@ -164,7 +158,7 @@ if (isToolCallingSupported()) {
         },
         action: async ({ content, keys, world_name, comment }) => {
             try {
-                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const targetWorld = (world_name || getActiveWorldName()).trim();
                 const data = await fetchWorldInfo(targetWorld);
                 
                 if (!data.entries) data.entries = {};
@@ -226,7 +220,7 @@ if (isToolCallingSupported()) {
         },
         action: async ({ uid, world_name, content, keys, comment }) => {
             try {
-                const targetWorld = sanitizeWorldName(world_name || getActiveWorldName());
+                const targetWorld = (world_name || getActiveWorldName()).trim();
                 const data = await fetchWorldInfo(targetWorld);
                 if (!data || !data.entries) {
                     return `Error: Failed to load lorebook "${targetWorld}".`;
