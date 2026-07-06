@@ -1,5 +1,16 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
+// Direct fetch of the CSRF token from the server to guarantee validity regardless of global scope access
+async function getCsrfTokenDirect() {
+    try {
+        const response = await $.getJSON('/csrf-token');
+        return response.token || "";
+    } catch (e) {
+        console.error("[Lorebook Editor Tool] Failed to fetch CSRF token from server:", e);
+        return "";
+    }
+}
+
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
     if (window.selected_world_info && window.selected_world_info[0]) {
@@ -25,14 +36,18 @@ function getActiveWorldName() {
     return "DefaultWorld";
 }
 
-// Fetch world info using SillyTavern's jQuery $.ajax to leverage automatic X-CSRF-Token prefiltering
+// Fetch world info using $.ajax with manually retrieved CSRF token
 async function fetchWorldInfo(worldName) {
     try {
+        const token = await getCsrfTokenDirect();
         const response = await $.ajax({
             url: '/api/worldinfo/get',
             type: 'POST',
+            headers: {
+                'X-CSRF-Token': token,
+                'Content-Type': 'application/json'
+            },
             data: JSON.stringify({ name: worldName }),
-            contentType: 'application/json',
             dataType: 'json'
         });
         return response;
@@ -42,14 +57,18 @@ async function fetchWorldInfo(worldName) {
     }
 }
 
-// Save world info using SillyTavern's jQuery $.ajax to leverage automatic X-CSRF-Token prefiltering
+// Save world info using $.ajax with manually retrieved CSRF token
 async function saveWorldInfoDirect(worldName, data) {
     try {
+        const token = await getCsrfTokenDirect();
         await $.ajax({
             url: '/api/worldinfo/edit',
             type: 'POST',
+            headers: {
+                'X-CSRF-Token': token,
+                'Content-Type': 'application/json'
+            },
             data: JSON.stringify({ name: worldName, data: data }),
-            contentType: 'application/json',
             dataType: 'json'
         });
     } catch (err) {
@@ -87,7 +106,7 @@ function getFreeUid(data) {
 
 // === REGISTER NATIVE TOOLS ===
 if (isToolCallingSupported()) {
-    console.log("[Lorebook Editor Tool] Registering AI native tools with jQuery AJAX integration...");
+    console.log("[Lorebook Editor Tool] Registering AI native tools with standalone CSRF fetching...");
 
     // Tool 1: Get active lorebook entries
     registerFunctionTool({
@@ -244,7 +263,7 @@ if (isToolCallingSupported()) {
         }
     });
 
-    console.log("[Lorebook Editor Tool] All native tools registered successfully via jQuery $.ajax.");
+    console.log("[Lorebook Editor Tool] All native tools registered successfully with direct CSRF management.");
 } else {
     console.warn("[Lorebook Editor Tool] Function calling is not supported or not enabled in settings.");
 }
