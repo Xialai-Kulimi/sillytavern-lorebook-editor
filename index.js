@@ -1,10 +1,34 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Helper to get request headers with CSRF/Auth tokens
-const getHeaders = window.getRequestHeaders || (() => ({ 
-    'Content-Type': 'application/json',
-    'X-CSRF-Token': window.csrf_token || ''
-}));
+// Import getRequestHeaders from core SillyTavern script module
+let getRequestHeaders;
+try {
+    // '/script.js' is served at the root domain by SillyTavern's express server
+    const coreScript = await import('/script.js');
+    getRequestHeaders = coreScript.getRequestHeaders;
+    console.log("[Lorebook Editor Tool] Successfully imported getRequestHeaders from root script.js");
+} catch (e) {
+    try {
+        // Relative path fallback
+        const coreScript = await import('../../../script.js');
+        getRequestHeaders = coreScript.getRequestHeaders;
+        console.log("[Lorebook Editor Tool] Successfully imported getRequestHeaders from relative path");
+    } catch (err) {
+        console.error("[Lorebook Editor Tool] Failed to import getRequestHeaders from core modules", err);
+    }
+}
+
+// Headers builder fallback
+const getHeaders = () => {
+    if (typeof getRequestHeaders === 'function') {
+        return getRequestHeaders();
+    }
+    // Deep fallback if getRequestHeaders is completely inaccessible
+    return { 
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': window.csrf_token || ''
+    };
+};
 
 // Sanitize filename to avoid directory traversal
 function sanitizeWorldName(name) {
@@ -14,11 +38,9 @@ function sanitizeWorldName(name) {
 
 // Helper to resolve the active world name bound to the chat
 function getActiveWorldName() {
-    // 1. Try global selected_world_info array
     if (window.selected_world_info && window.selected_world_info[0]) {
         return window.selected_world_info[0];
     }
-    // 2. Try window variables
     if (window.world_names && window.world_names[0]) {
         const selectEl = document.getElementById('world_editor_select');
         if (selectEl && selectEl.value !== "") {
@@ -26,16 +48,14 @@ function getActiveWorldName() {
             if (window.world_names[index]) return window.world_names[index];
         }
     }
-    // 3. Try context chatMetadata
     const context = SillyTavern.getContext();
     if (context.chatMetadata && context.chatMetadata.world_info) {
         return context.chatMetadata.world_info;
     }
-    // 4. Try active character name
     if (context.characters && context.characterId !== undefined && context.characters[context.characterId]) {
         const char = context.characters[context.characterId];
-        if (char.data && char.data.name) {
-            return char.data.name;
+        if (char.data && char.data.world) {
+            return char.data.world;
         }
     }
     return "DefaultWorld";
@@ -47,7 +67,8 @@ async function fetchWorldInfo(worldName) {
         const response = await fetch('/api/worldinfo/get', {
             method: 'POST',
             headers: getHeaders(),
-            body: JSON.stringify({ name: worldName })
+            body: JSON.stringify({ name: worldName }),
+            cache: 'no-cache'
         });
         if (response.ok) {
             return await response.json();
@@ -55,7 +76,6 @@ async function fetchWorldInfo(worldName) {
     } catch (e) {
         console.warn(`[Lorebook Editor Tool] Failed to fetch existing world info for "${worldName}", assuming empty/new.`, e);
     }
-    // If not found or failed, return empty world info structure
     return { entries: {} };
 }
 
