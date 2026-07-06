@@ -1,18 +1,13 @@
 const { registerFunctionTool, isToolCallingSupported, getContext } = SillyTavern.getContext();
 
-// Import core world-info functions dynamically to synchronize in-memory cache and trigger UI repaint
+// Import worldInfoCache dynamically from SillyTavern's frontend module to clear client-side cache
 let worldInfoCache;
-let printWorldInfoList;
-let reloadEditor;
-
 try {
     const worldInfoModule = await import('/scripts/world-info.js');
     worldInfoCache = worldInfoModule.worldInfoCache;
-    printWorldInfoList = worldInfoModule.printWorldInfoList;
-    reloadEditor = worldInfoModule.reloadEditor;
-    console.log("[Lorebook Editor Tool] Successfully imported world-info core functions.");
+    console.log("[Lorebook Editor Tool] Successfully imported worldInfoCache from core module.");
 } catch (e) {
-    console.error("[Lorebook Editor Tool] Failed to import world-info core functions dynamically:", e);
+    console.error("[Lorebook Editor Tool] Failed to import worldInfoCache dynamically:", e);
 }
 
 // Direct fetch of the CSRF token from the server to guarantee validity regardless of global scope access
@@ -109,20 +104,17 @@ async function saveWorldInfoDirect(worldName, data) {
         await window.eventSource.emit(window.event_types.WORLDINFO_UPDATED, worldName, data);
     }
     
-    // 3. Instantly repaint the UI editor list (clears and redraws left-hand items panel)
-    if (typeof printWorldInfoList === 'function') {
-        printWorldInfoList();
+    // 3. Trigger native SillyTavern editor refresh button click in DOM (forces complete UI repaint instantly if editor is open)
+    const refreshBtn = $('#world_refresh');
+    if (refreshBtn.length > 0) {
+        refreshBtn.trigger('click');
+        console.log("[Lorebook Editor Tool] Triggered native #world_refresh click event.");
     }
     
-    // 4. Reload Editor view fields for the current world info name
-    if (typeof reloadEditor === 'function') {
-        reloadEditor(worldName);
-    }
-
-    // 5. Force trigger jQuery change events to force browser UI repaint in the DOM
+    // 4. Force trigger jQuery change events to force browser UI repaint in the editor select dropdown
     $('#world_editor_select').trigger('change');
     
-    // 6. Auto add to active list if not already selected in current session
+    // 5. Auto add to active list if not already selected in current session
     if (window.selected_world_info && !window.selected_world_info.includes(worldName)) {
         window.selected_world_info.push(worldName);
         $('#world_info').val(window.selected_world_info).trigger('change');
